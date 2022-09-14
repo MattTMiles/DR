@@ -1,9 +1,31 @@
-# The purpose of this script is to estimate the clock corrections from pulsar residuals where the clock corrections are turned off
-# This will return the difference between the estimated clock corrections, the difference between the clock correction file and the estimations, and maybe more
+'''
+The purpose of this script is to estimate the clock corrections from pulsar residuals where the clock correction files are not accounted for
+This will return the difference between the estimated clock corrections, the difference between the clock correction file and the estimations.
+In addition this will return and save a publication-ready plot detailing the recovered signal.
 
+The parsed arguments and descriptions detail different versions of the signal that can be returned, in short they are described here:
+- data: Directory containing IPTA standard timing files and ephemerides of the chosen pulsars
+- results: Directory where the results will be output to. The script will create it if it does not already exist.
+- solo: Takes a single pulsar name. This optionally recreates the signal from data of a single pulsar.
+- residuals: Uses a pre-created file containg information of the pulsar timing residuals. 
+    Due to the different formats this file can come in this is NOT RECOMMENDED.
+- extended: Activates the nested matrix model to recreate the final signal from a series of pulsars. 
+    This method is ~10x slower but is considerably more accurate as it takes into account the true covariance of the clock signal.
+- excepted: Takes a single pulsar name. This excepts the chosen pulsar from the recreation of the signal. 
+    This is used to test the influence of a single pulsar to the signal.
+- scaled: If numerical precision errors are suspected (potential due to large integrations and matrix inversions at the scale of 1e-30),
+    this will scale integration inputs and inversion inputs by 1e30 and then return them as expected. Should only be used as a check.
+- gw: Includes the expected covariance signal of a gravitaional wave signal to test for the origin of anomalies in the signal.
+
+'''
+
+# Pulsar Timing standard ephemeris information:
 # Comparing to BIPM2019
 # Using DE438
-# Final method will need to be using noise subtracted residuals, for now (12/04/2022) we will make this for normal residuals until the noise subtracted are ready
+
+# Recommended run:
+# python clock_recover_experimental.py -datadir <data directory> -results <results directory> -extended
+
 
 import numpy as np 
 import psrchive
@@ -17,14 +39,12 @@ import argparse
 import pandas as pd
 from scipy import interpolate
 
-# Run with python ~/soft/DR/clock_recovery.py <data_dir> <results_dir>
-
 
 parser = argparse.ArgumentParser(description="Clock comparison")
 parser.add_argument("-data", dest="data", help="data directory to use", required = True)
 parser.add_argument("-results", dest="results", help="result directory to use", required = True)
 parser.add_argument("-solo", dest="solo", help="(Optional) Adding this flag will make this work on a singular pulsar", required=False)
-parser.add_argument("-residuals", dest="residuals", help="(Optional) Adding this flag will make this work on a particular residual file (Not working yet)", required=False)
+parser.add_argument("-residuals", dest="residuals", help="(Optional) Adding this flag will make this work on a particular residual file (Not satisfactory)", required=False)
 parser.add_argument("-extended",dest="extended", action="store_true", help="(Optional) Adding this flag result in a more advanced nested matrix method", required=False)
 parser.add_argument("-excepted", dest="excepted", help="(Optional) Adding this flag will exclude a singular pulsar from the process program data.", required=False)
 parser.add_argument("-scaled",dest="scaled", action="store_true", help="(Optional) Adding this flag results in everything being scaled by 1e30 if you suspect numerical precision errors.", required=False)
@@ -85,23 +105,19 @@ def pwr_spec_dm2(f,dm_gamma):
 npt = 500
 mjdpt = np.zeros(npt)
 
-#Use 1909 for the global MJDs. We know it already works so should be fine
-
-#timfile_1909 = glob.glob("/fred/oz002/users/mmiles/MSP_DR/clock_correction_work/enterprise_version/nanograv_clones/clocks/best_10_data/*J1909-3744*.tim")[0]
-#resfile_1909 = "/fred/oz002/users/mmiles/MSP_DR/clock_correction_work/enterprise_version/nanograv_clones/clocks/ryans_residuals/J1909-3744_residuals.dat"
+#Use longest timespan pulsar as basis of signal recreation
 resfile_1909 = "/fred/oz002/users/mmiles/MSP_DR/clock_correction_work/enterprise_version/nanograv_clones/clocks/best_10_data_updated_pars/J1909-3744_residuals.dat"
 mjds_1909 = np.loadtxt(resfile_1909,usecols=0)
 mk2utc = np.loadtxt('/fred/oz002/rshannon/tempo2/clock/mk2utc.clk',skiprows=7)
 mk2utc_mjds = mk2utc[:,0]
 global_mjds = mk2utc_mjds[:-1]
-#global_mjds = mjds_1909
 
 
 mjdmin = np.min(global_mjds)
 mjdmax = np.max(global_mjds)
 
 
-
+#Create artificial time range for reconstruction
 for i in range(npt):
     mjdpt[i] = mjdmin + ((mjdmax-mjdmin)/npt)*(i+0.5)
 
@@ -112,7 +128,7 @@ nday=int(Tdays+1)
 # Convert days to years
 T = Tdays/365.25
 
-#Start making directories if they don't exist 
+#Make directories if they don't exist 
 
 if not os.path.exists(results_dir):
     try:
@@ -123,7 +139,13 @@ if not os.path.exists(results_dir):
 
 total_df = []
 
+
 def master_function(pulsar,residuals=residuals):
+    '''
+    For each pulsar, this returns the clock signal and covariance that can be inferred from a single pulsar.
+    '''
+
+    # Make directories if not already there
     pulsar_dir = results_dir+"/"+pulsar
 
     if not os.path.exists(pulsar_dir):
@@ -145,21 +167,14 @@ def master_function(pulsar,residuals=residuals):
 
     os.system("cd "+pulsar_cov)
 
-
-    #timfile = parent_tim+"*"+pulsar+"*.tim"
-    #timfile = glob.glob(data_dir+"/*"+pulsar+"*.tim")[0]
-    #timfile = sys.argv[2]
-    
-
-    
-
+    #Collect ephemeris
     parfile = glob.glob(data_dir+"/*"+pulsar+"*.par")[0]
-    #parfile = sys.argv[3]
+    #Collect pulsar timing residuals
     if residuals=="None":
         residuals = glob.glob(data_dir+"/*"+pulsar+"_residuals.dat")[0]
 
 
-    #residuals = sys.argv[4]
+    #Load in data from residuals
     t_res = np.loadtxt(residuals,usecols=2)
     freqs = np.loadtxt(residuals,usecols=1)
     mjds = np.loadtxt(residuals,usecols=0)
@@ -169,12 +184,8 @@ def master_function(pulsar,residuals=residuals):
 
     mjd_1 = mjds[0]
     mjd_end = mjds[-1]
-    #mjd_end = 58800
-
-    #VALUES FROM ENTERPRISE
-    #clk_amp = -13.189181408304862
-    #clk_gamma = 2.4067997669710457
-
+ 
+    #Inferred clock signal red noise gaussian process paramaters as obtained by Enterprise (noise modelling software)
     clk_amp = -13.35
     clk_gamma = 2.1
 
@@ -193,7 +204,7 @@ def master_function(pulsar,residuals=residuals):
 
     cov_gw = np.zeros(nday)
 
-
+    #Initialise the noise parameters before setting them
     dm_amp = 0
     dm_gamma = 0
     red_amp = 0
@@ -204,6 +215,7 @@ def master_function(pulsar,residuals=residuals):
     gw_amp = 0
     gw_gamma = 0
 
+    #Search through ephemeris file for noise parameters
     openpar = open(parfile,"r")
     openpar.seek(0)
     
@@ -230,18 +242,21 @@ def master_function(pulsar,residuals=residuals):
         if "TNGlobalEF" in line:
             efac = float(line.split(" ")[-1])
 
+    #Implant GW signal if selected
     if gw is not None:
         gw_amp = -14.5
         gw_gamma = 4.33
 
     
-    #Arbitrary noise alterations below
+    #Arbitrary noise alterations below (convention)
     #equad = equad*2
     #ecorr = ecorr*2
     #efac = efac*2
 
+    #Define the covariance functions for each noise process for the pulsar
     for i in range(len(mjd_dummy)):
         
+        #DM noise constant as per Lentati et al. 2016
         K = 2.410*10**-16
 
         #time step in years
@@ -264,7 +279,6 @@ def master_function(pulsar,residuals=residuals):
 
     
     #Initialize the covariance matrices
-    
 
     C_clock = np.zeros((num_toas,num_toas))
     C_spin = np.zeros((num_toas,num_toas))
@@ -273,7 +287,8 @@ def master_function(pulsar,residuals=residuals):
     C_white = np.zeros((num_toas,num_toas))
 
     C_gw = np.zeros((num_toas,num_toas))
-        
+    
+    #Populate the covariance matrices
     for i in range(num_toas):
         #print("{}".format(i))
         #equad = -8
@@ -316,6 +331,7 @@ def master_function(pulsar,residuals=residuals):
     np.save(pulsar_cov+"/"+pulsar+"_C_ecorr",C_ecorr)
     np.save(pulsar_cov+"/"+pulsar+"_C_white",C_white)
 
+    #Mid-run check to see that the values are not out by a significant order
     print(pulsar)
     print("C_clock: {}; C_spin: {}; C_dm: {}; C_ecorr: {}; C_white: {}".format(C_clock[0][0],C_spin[0][0],C_dm[0][0],C_ecorr[0][0],C_white[0][0]))
     
@@ -333,17 +349,20 @@ def master_function(pulsar,residuals=residuals):
 
     np.save(pulsar_cov+"/"+pulsar+"_Cov_total",Cov_total)
 
+    #Invert the combined covariance matrices
     Cov_inv = np.linalg.inv(Cov_total)
 
     ngrand = num_toas + npt
     Cov_simulated = np.zeros((ngrand,ngrand))
 
+    #Populate the recreated "simulated" signal
     for i in range(num_toas):
         for j in range(num_toas):
             Cov_simulated[i][j] = Cov_total_no_clock[i][j]
     
     Cov_clock_simulated = np.zeros((ngrand,ngrand))
 
+    #Populate the global clock signal
     for i in range(ngrand):
         for j in range(ngrand):
 
@@ -361,6 +380,7 @@ def master_function(pulsar,residuals=residuals):
 
             Cov_clock_simulated[i][j] = cov_clock[imjd]
 
+    #Combine the covariance matrices of the clock signal and the pulsar intrinsic noise processes
     Cov_simulated = Cov_simulated + Cov_clock_simulated
     
     Cov_inv_simulated = np.linalg.inv(Cov_simulated)
@@ -370,14 +390,13 @@ def master_function(pulsar,residuals=residuals):
     for i in range(num_toas):
         t_res_sim[i] = t_res[i]
 
-
+    #Find the associaed uncertaities
     error_temp = np.matmul(Cov_inv_simulated,Cov_clock_simulated)
     sim_clock_matrix = Cov_clock_simulated - np.matmul(Cov_clock_simulated,error_temp)
     sim_clock_error = np.diagonal(sim_clock_matrix)
     sim_clock_seconds = np.sqrt(np.abs(sim_clock_error))*(365.25*86400)
 
-    #Okay so this should be the clock waveform
-    #if 
+    #Find the reconstructed clock waveform
     temp_waveform = np.matmul(Cov_inv,t_res)
     clk_waveform = np.matmul(C_clock,temp_waveform)
 
@@ -410,6 +429,7 @@ def master_function(pulsar,residuals=residuals):
     return Cov_total_no_clock, cov_clock, t_res, mjds
     #return Cov_total, cov_clock, t_res, mjds
 
+# Condition if no extended nested matrices algorithm to be used
 if ext==False:
     if args.solo is None:
         os.chdir(data_dir)
@@ -432,6 +452,7 @@ if ext==False:
         
         master_function(pulsar,residuals)
 
+# Condition where the extended nested matrix algorithm
 if ext==True:
     if args.solo is not None:
         print("Extended is only for where there are multiple pulsars. It won't do anything if there's only one.")
@@ -443,27 +464,24 @@ if ext==True:
         else:
             num_pulsars = len(glob.glob("J*par"))
 
-        #npt = 500
-        
+        # Create large scale nested covariance matrix 
         master_cov = np.zeros((num_pulsars,num_pulsars),dtype=object)
         master_cov_clock = np.zeros((num_pulsars,num_pulsars),dtype=object)
         master_res = np.zeros(num_pulsars,dtype=object)
         master_mjds = np.zeros(num_pulsars,dtype=object)
 
-        #npt = 500 
+        
         total_length = []
+        #Condition where a single pulsar is removed from the reconstruction
         if args.excepted is not None:
             for i, par in enumerate(set(glob.glob("J*par"))-set(glob.glob("*"+excepted+"*"))):
 
                 pulsar = par.split(".")[0]
                 if not pulsar==excepted:
                     print(pulsar)
-                
+                    #Calls master function and collects each pulsar's information
                     Cov_total_noClock, cov_clock, t_res, mjds = master_function(pulsar,residuals)
-                    #plt.show()
-                    
-                    #Cov_total_in = np.zeros((2837, 2837),dtype=np.float64)
-                    #Cov_total_in[:Cov_total.shape[0],:Cov_total.shape[1]] = Cov_total
+                    #Populate the nested covariance matrix for each pulsar
                     master_cov[i][i] = Cov_total_noClock
                     master_cov_clock = cov_clock
                     master_res[i] = t_res
@@ -492,13 +510,13 @@ if ext==True:
         total_length = np.sum(total_length)
         total_length_npt = total_length+npt
         
-        #master_cov_inv = np.linalg.inv(master_cov)
-
+        
+        #Initialise the covariance matrices
         master_cov_inv_sim = np.zeros((total_length_npt,total_length_npt),dtype=np.float64)
         master_cov_sim = np.zeros((total_length_npt,total_length_npt),dtype=np.float64)
         master_cov_clock_sim = np.zeros((total_length_npt,total_length_npt),dtype=np.float64)
         eval_master_cov = np.zeros((total_length,total_length),dtype=np.float64)
-        #raise a
+
         ntoa_master = 0
         
         for i in range(len(master_res)):
@@ -508,10 +526,6 @@ if ext==True:
             for j in range(ntoa_int):
                 for k in range(ntoa_int):
                     #To account for the 0's not being of matrix form do this try/except loop
-                    #try:
-                    #    master_cov_inv_sim[j+ntoa_master][k+ntoa_master] = master_cov_inv[i][i][j][k]
-                    #except TypeError:
-                    #    master_cov_inv_sim[j+ntoa_master][k+ntoa_master] = 0
                     try:
                         eval_master_cov[j+ntoa_master][k+ntoa_master] = master_cov[i][i][j][k]
                     except TypeError:
@@ -519,12 +533,13 @@ if ext==True:
                     
             ntoa_master = ntoa_master + ntoa_int
 
+        #initialise the size of the total reconstructed covariance matrix
         Cov_clock = np.zeros((total_length,total_length))
-    
 
         master_mjds_active = np.hstack(master_mjds)
         master_res_active = np.hstack(master_res)
 
+        #Create a large covariance matrix for the clock signal of the same size as the nested matrix
         for i in range(ntoa_master):
             for j in range(ntoa_master):
 
@@ -550,27 +565,24 @@ if ext==True:
                 imjd = abs(int(mjd2-mjd1))
                 master_cov_clock_sim[i][j] = master_cov_clock[imjd]
         
-
-
-        #master_cov_with_clock = eval_master_cov + Cov_clock
+        #Combine the nested matrix and the clock signal matrix
         cov_total = eval_master_cov + Cov_clock
-        
+        #Invert
         master_cov_inv = np.linalg.inv(cov_total)
 
+        #Create the simulated matrix mirroring the recreation over an arbitrary date range
         for i in range(total_length):
             for j in range(total_length):
                 master_cov_inv_sim[i][j] = master_cov_inv[i][j]
 
-        #master_cov_total_sim = master_cov_sim + master_cov_clock_sim
-
-        #master_cov_inv_sim = np.linalg.inv(master_cov_total_sim)
         
         master_t_res_sim = np.zeros(total_length_npt,dtype=np.float64)
 
-
+        # Where data exists, collect the timing residuals
         for i in range(ntoa_master):
             master_t_res_sim[i] = master_res_active[i]
 
+        #Creates the recreated clock signal as per the nested matrix algorithm
         print("Creating master waveform")
         master_temp_waveform_sim = np.matmul(master_cov_inv_sim,master_t_res_sim)
         master_clk_sim = np.matmul(master_cov_clock_sim,master_temp_waveform_sim)
@@ -578,7 +590,7 @@ if ext==True:
         master_clk_to_save = master_clk_sim[ntoa_master:]
         np.save(results_dir+"/clk_sim_waveform",master_clk_to_save)
         
-        
+        #Create the associated uncertainties
         print("Creating error array")
         master_error_temp = np.matmul(master_cov_inv_sim,master_cov_clock_sim)
         master_sim_clock_matrix = master_cov_clock_sim - np.matmul(master_cov_clock_sim,master_error_temp)
@@ -588,12 +600,11 @@ if ext==True:
         master_error_to_save = master_sim_clock_seconds[ntoa_master:]
         np.save("/fred/oz002/users/mmiles/MSP_DR/clock_correction_work/enterprise_version/nanograv_clones/clocks/clk_sim_error",master_error_to_save)
         
-        #print("Using 1909 error placeholder")
-        #placehold_error = np.load('/fred/oz002/users/mmiles/MSP_DR/clock_correction_work/enterprise_version/nanograv_clones/clocks/best_10_updated_pars_results/J1909-3744/covariance/J1909-3744_clk_sim_error_array.npy')
-
+        #Isolate the reported clock signal for comparison
         mk2utc = np.loadtxt('/fred/oz002/users/mmiles/MSP_DR/clock_correction_work/enterprise_version/nanograv_clones/clocks/mk2utc.clk',skiprows=7)
         mk2utc_error = 4.925*1e-9
 
+        #Plot the outcome
         font = 20
         fig, axs = plt.subplots(2, 1, sharex=True,gridspec_kw={'height_ratios': [3, 1]})
         fig.subplots_adjust(hspace=0)
@@ -602,9 +613,7 @@ if ext==True:
         axs[0].plot(mk2utc[:,0],(-mk2utc[:,1]) - np.mean(-mk2utc[:,1]),label='mk2utc', color='tab:blue')
         axs[0].fill_between(mk2utc[:,0], (-mk2utc[:,1] - mk2utc_error) - np.mean(-mk2utc[:,1]), (-mk2utc[:,1] + mk2utc_error) - np.mean(-mk2utc[:,1]), alpha=0.2, color='tab:blue')
         axs[1].scatter(master_mjds_active, master_res_active, marker='x', color='black', alpha=0.2)
-        #plt.fill_between(mjdpt, (master_clk_to_save - placehold_error) - np.mean(master_clk_to_save), (master_clk_to_save + placehold_error) - np.mean(master_clk_to_save),alpha=0.2,color="xkcd:green")
-        #plt.fill_between(mjdpt, (master_clk_to_save - master_error_to_save) - np.mean(master_clk_to_save), (master_clk_to_save + master_error_to_save) - np.mean(master_clk_to_save),alpha=0.2,color="xkcd:green")
-        #plt.plot(mk2utc[:,0],(-mk2utc[:,1]) - np.mean(-mk2utc[:,1]),label='mk2utc')
+
         axs[0].set_title("Recovered clock signal",fontsize=font)
         axs[1].ticklabel_format(axis="y",style="sci",scilimits=(-6,-6))
         axs[1].yaxis.offsetText.set_fontsize(16)
@@ -619,6 +628,8 @@ if ext==True:
         fig.savefig(results_dir+"/Clock_sim_MJDS")
         fig.show()
 
+
+    #Description of the below is equivalent to above.
     if args.solo is None and args.scaled is not None:
         os.chdir(data_dir)
         if args.excepted is not None:
@@ -626,14 +637,13 @@ if ext==True:
         else:
             num_pulsars = len(glob.glob("J*par"))
 
-        #npt = 500
         
         master_cov = np.zeros((num_pulsars,num_pulsars),dtype=object)
         master_cov_clock = np.zeros((num_pulsars,num_pulsars),dtype=object)
         master_res = np.zeros(num_pulsars,dtype=object)
         master_mjds = np.zeros(num_pulsars,dtype=object)
 
-        #npt = 500 
+
         total_length = []
         if args.excepted is not None:
             for i, par in enumerate(set(glob.glob("J*par"))-set(glob.glob("*"+excepted+"*"))):
@@ -643,10 +653,7 @@ if ext==True:
                     print(pulsar)
                 
                     Cov_total_noClock, cov_clock, t_res, mjds = master_function(pulsar,residuals)
-                    #plt.show()
-                    
-                    #Cov_total_in = np.zeros((2837, 2837),dtype=np.float64)
-                    #Cov_total_in[:Cov_total.shape[0],:Cov_total.shape[1]] = Cov_total
+
                     master_cov[i][i] = 1e30*Cov_total_noClock
                     master_cov_clock = cov_clock
                     master_res[i] = t_res
@@ -660,10 +667,7 @@ if ext==True:
                 print(pulsar)
             
                 Cov_total_noClock, cov_clock, t_res, mjds = master_function(pulsar,residuals)
-                #plt.show()
-                
-                #Cov_total_in = np.zeros((2837, 2837),dtype=np.float64)
-                #Cov_total_in[:Cov_total.shape[0],:Cov_total.shape[1]] = Cov_total
+
                 master_cov[i][i] = 1e30*Cov_total_noClock
                 master_cov_clock = cov_clock
                 master_res[i] = t_res
@@ -675,13 +679,12 @@ if ext==True:
         total_length = np.sum(total_length)
         total_length_npt = total_length+npt
         
-        #master_cov_inv = np.linalg.inv(master_cov)
 
         master_cov_inv_sim = np.zeros((total_length_npt,total_length_npt),dtype=np.float64)
         master_cov_sim = np.zeros((total_length_npt,total_length_npt),dtype=np.float64)
         master_cov_clock_sim = np.zeros((total_length_npt,total_length_npt),dtype=np.float64)
         eval_master_cov = np.zeros((total_length,total_length),dtype=np.float64)
-        #raise a
+
         ntoa_master = 0
         
         for i in range(len(master_res)):
@@ -690,11 +693,7 @@ if ext==True:
             print("Pulsar {}".format(i+1))
             for j in range(ntoa_int):
                 for k in range(ntoa_int):
-                    #To account for the 0's not being of matrix form do this try/except loop
-                    #try:
-                    #    master_cov_inv_sim[j+ntoa_master][k+ntoa_master] = master_cov_inv[i][i][j][k]
-                    #except TypeError:
-                    #    master_cov_inv_sim[j+ntoa_master][k+ntoa_master] = 0
+
                     try:
                         eval_master_cov[j+ntoa_master][k+ntoa_master] = master_cov[i][i][j][k]
                     except TypeError:
@@ -734,8 +733,6 @@ if ext==True:
                 master_cov_clock_sim[i][j] = 1e30*master_cov_clock[imjd]
         
 
-
-        #master_cov_with_clock = eval_master_cov + Cov_clock
         cov_total = eval_master_cov + Cov_clock
         
         master_cov_inv = np.linalg.inv(cov_total)
@@ -744,9 +741,6 @@ if ext==True:
             for j in range(total_length):
                 master_cov_inv_sim[i][j] = master_cov_inv[i][j]
 
-        #master_cov_total_sim = master_cov_sim + master_cov_clock_sim
-
-        #master_cov_inv_sim = np.linalg.inv(master_cov_total_sim)
         
         master_t_res_sim = np.zeros(total_length_npt,dtype=np.float64)
 
@@ -771,9 +765,6 @@ if ext==True:
 
         master_error_to_save = master_sim_clock_seconds[ntoa_master:]
         np.save("/fred/oz002/users/mmiles/MSP_DR/clock_correction_work/enterprise_version/nanograv_clones/clocks/clk_sim_error",master_error_to_save)
-        
-        #print("Using 1909 error placeholder")
-        #placehold_error = np.load('/fred/oz002/users/mmiles/MSP_DR/clock_correction_work/enterprise_version/nanograv_clones/clocks/best_10_updated_pars_results/J1909-3744/covariance/J1909-3744_clk_sim_error_array.npy')
 
         mk2utc = np.loadtxt('/fred/oz002/users/mmiles/MSP_DR/clock_correction_work/enterprise_version/nanograv_clones/clocks/mk2utc.clk',skiprows=7)
         mk2utc_error = 4.925*1e-9
@@ -811,12 +802,7 @@ if ext==True:
         axs[0].plot(mk2utc[:,0],((-mk2utc[:,1]) - np.mean(-mk2utc[:,1]))*1e6,label='KTT-UTC(GPS)', color='tab:blue')
         axs[0].fill_between(mk2utc[:,0], ((-mk2utc[:,1] - mk2utc_error) - np.mean(-mk2utc[:,1]))*1e6, ((-mk2utc[:,1] + mk2utc_error) - np.mean(-mk2utc[:,1]))*1e6, alpha=0.2, color='tab:blue')
         axs[2].scatter(master_mjds_active, [0]*len(master_mjds_active), marker='x', color='black', alpha=0.2)
-        #plt.fill_between(mjdpt, (master_clk_to_save - placehold_error) - np.mean(master_clk_to_save), (master_clk_to_save + placehold_error) - np.mean(master_clk_to_save),alpha=0.2,color="xkcd:green")
-        #plt.fill_between(mjdpt, (master_clk_to_save - master_error_to_save) - np.mean(master_clk_to_save), (master_clk_to_save + master_error_to_save) - np.mean(master_clk_to_save),alpha=0.2,color="xkcd:green")
-        #plt.plot(mk2utc[:,0],(-mk2utc[:,1]) - np.mean(-mk2utc[:,1]),label='mk2utc')
-        #axs[0].set_title("Recovered clock signal",fontsize=font)
-        #axs[1].ticklabel_format(axis="y",style="sci",scilimits=(-6,-6))
-        
+
         axs[1].plot(new_x,res,label="Residual",color="xkcd:teal")
         axs[1].fill_between(new_x,res-quad_err,res+quad_err,alpha=0.2,color="xkcd:teal")
         axs[1].axhline(0,linestyle="--",color="xkcd:grey")
